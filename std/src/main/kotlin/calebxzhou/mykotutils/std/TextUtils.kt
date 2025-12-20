@@ -20,13 +20,32 @@ val String.decodeBase64
     get() = String(Base64.getDecoder().decode(this), Charsets.UTF_8)
 val String.encodeBase64
     get() = Base64.getEncoder().encodeToString(this.toByteArray(Charsets.UTF_8))
-// Heuristic for wide code points. Covers:
-// - CJK Unified Ideographs & Extensions
-// - Hangul syllables & Jamo
-// - Hiragana, Katakana, Bopomofo
-// - Fullwidth and Halfwidth forms (treat fullwidth as wide)
-// - Enclosed CJK, Compatibility Ideographs
-// - Common emoji blocks (Emoticons, Misc Symbols & Pictographs, Supplemental Symbols & Pictographs, etc.)
+
+/**
+ * Display length where CJK (Chinese/Japanese/Korean) full‑width characters and common emoji count as 2 cells,
+ * others count as 1. Useful for monospace alignment / padding.
+ */
+val String.displayLength: Int
+    get() {
+        var len = 0
+        var i = 0
+        while (i < length) {
+            val cp = codePointAt(i)
+            val count = Character.charCount(cp)
+            len += if (cp.isWideCodePoint()) 2 else 1
+            i += count
+        }
+        return len
+    }
+/*
+Heuristic for wide code points. Covers:
+- CJK Unified Ideographs & Extensions
+- Hangul syllables & Jamo
+- Hiragana, Katakana, Bopomofo
+- Fullwidth and Halfwidth forms (treat fullwidth as wide)
+- Enclosed CJK, Compatibility Ideographs
+- Common emoji blocks (Emoticons, Misc Symbols & Pictographs, Supplemental Symbols & Pictographs, etc.)
+*/
 fun Int.isWideCodePoint(): Boolean {
     // Fast path ranges
     return when {
