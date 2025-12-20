@@ -5,6 +5,7 @@ import org.gradle.api.plugins.JavaPluginExtension
 import org.gradle.api.tasks.SourceSetContainer
 import org.gradle.api.tasks.bundling.Jar
 import org.gradle.api.tasks.javadoc.Javadoc
+import org.gradle.api.tasks.testing.Test
 import org.jetbrains.kotlin.gradle.dsl.KotlinJvmProjectExtension
 
 plugins {
@@ -28,6 +29,12 @@ subprojects {
 	apply(plugin = "java-library")
 	apply(plugin = "maven-publish")
 
+	val testImplementation by configurations
+
+	dependencies {
+		testImplementation(kotlin("test"))
+	}
+
 	repositories {
 		mavenLocal()
 		mavenCentral()
@@ -40,6 +47,10 @@ subprojects {
 	extensions.configure<JavaPluginExtension> {
 		withSourcesJar()
 		withJavadocJar()
+	}
+
+	tasks.withType<Test>().configureEach {
+		useJUnitPlatform()
 	}
 
 	plugins.withType<JavaPlugin> {
