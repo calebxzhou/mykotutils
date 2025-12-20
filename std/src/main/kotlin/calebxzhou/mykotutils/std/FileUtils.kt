@@ -1,6 +1,5 @@
 package calebxzhou.mykotutils.std
 
-import sun.jvm.hotspot.debugger.amd64.AMD64ThreadContext.RDI
 import java.io.File
 import java.io.InputStream
 import java.security.MessageDigest
