@@ -48,12 +48,13 @@ data class DownloadProgress(
     val bytesDownloaded: Long,
     val totalBytes: Long,
     val speedBytesPerSecond: Double,
-){
+) {
     val percent: Double
         get() = if (totalBytes <= 0) -1.0 else bytesDownloaded.toDouble() / totalBytes.toDouble() * 100.0
 }
 
 private data class RemoteFileInfo(val contentLength: Long, val acceptRanges: Boolean)
+
 private val lgr by Loggers
 private const val MIN_PARALLEL_DOWNLOAD_SIZE = 2L * 1024 * 1024 // 2MB
 private const val TARGET_RANGE_CHUNK_SIZE = 2L * 1024 * 1024 // 2MB per chunk
@@ -79,29 +80,26 @@ private val httpDlClient
                 socketTimeoutMillis = 60_000
             }
         }
+
 suspend fun Path.downloadFileFrom(
     url: String,
     onProgress: (DownloadProgress) -> Unit
-): Boolean {
+): Result<Path> {
     lgr.info { "Start download file:  $url" }
     val targetPath = this
-    return try {
-        val info = fetchRemoteFileInfo(url)
-        val canUseRanges = info?.let { it.acceptRanges && it.contentLength >= MIN_PARALLEL_DOWNLOAD_SIZE } == true
-        if (canUseRanges) {
-            runCatching {
-                downloadWithRanges(url, targetPath, info.contentLength, onProgress)
-            }.getOrElse { error ->
-                lgr.warn(error) { "Parallel download failed, falling back to single stream" }
-                downloadSingleStream(url, targetPath, onProgress)
-            }
-        } else {
+    val info = fetchRemoteFileInfo(url)
+    val canUseRanges = info?.let { it.acceptRanges && it.contentLength >= MIN_PARALLEL_DOWNLOAD_SIZE } == true
+    if (canUseRanges) {
+        runCatching {
+            downloadWithRanges(url, targetPath, info.contentLength, onProgress)
+        }.getOrElse { error ->
+            lgr.warn(error) { "Parallel download failed, falling back to single stream" }
             downloadSingleStream(url, targetPath, onProgress)
         }
-    } catch (e: Exception) {
-        lgr.error("Download failed for $url", e)
-        false
+    } else {
+        downloadSingleStream(url, targetPath, onProgress)
     }
+    return Result.success(this)
 }
 
 private suspend fun fetchRemoteFileInfo(url: String): RemoteFileInfo? = try {
@@ -156,28 +154,29 @@ private suspend fun downloadSingleStream(
         var lastUpdateTime = startTime
 
         withContext(Dispatchers.IO) {
-            Files.newOutputStream(targetPath, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING).use { outputStream ->
-                while (!channel.isClosedForRead) {
-                    val bytesRead = channel.readAvailable(buffer, 0, buffer.size)
-                    if (bytesRead == -1) break
-                    if (bytesRead == 0) continue
+            Files.newOutputStream(targetPath, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING)
+                .use { outputStream ->
+                    while (!channel.isClosedForRead) {
+                        val bytesRead = channel.readAvailable(buffer, 0, buffer.size)
+                        if (bytesRead == -1) break
+                        if (bytesRead == 0) continue
 
-                    outputStream.write(buffer, 0, bytesRead)
-                    bytesDownloaded += bytesRead
+                        outputStream.write(buffer, 0, bytesRead)
+                        bytesDownloaded += bytesRead
 
-                    val currentTime = System.currentTimeMillis()
-                    if (currentTime - lastUpdateTime >= 500) {
-                        val elapsedSeconds = (currentTime - startTime) / 1000.0
-                        val speed = if (elapsedSeconds > 0) bytesDownloaded / elapsedSeconds else 0.0
-                        onProgress(DownloadProgress(bytesDownloaded, totalBytes, speed))
-                        lastUpdateTime = currentTime
+                        val currentTime = System.currentTimeMillis()
+                        if (currentTime - lastUpdateTime >= 500) {
+                            val elapsedSeconds = (currentTime - startTime) / 1000.0
+                            val speed = if (elapsedSeconds > 0) bytesDownloaded / elapsedSeconds else 0.0
+                            onProgress(DownloadProgress(bytesDownloaded, totalBytes, speed))
+                            lastUpdateTime = currentTime
+                        }
                     }
-                }
 
-                val elapsedSeconds = (System.currentTimeMillis() - startTime) / 1000.0
-                val speed = if (elapsedSeconds > 0) bytesDownloaded / elapsedSeconds else 0.0
-                onProgress(DownloadProgress(bytesDownloaded, totalBytes, speed))
-            }
+                    val elapsedSeconds = (System.currentTimeMillis() - startTime) / 1000.0
+                    val speed = if (elapsedSeconds > 0) bytesDownloaded / elapsedSeconds else 0.0
+                    onProgress(DownloadProgress(bytesDownloaded, totalBytes, speed))
+                }
         }
 
         true
