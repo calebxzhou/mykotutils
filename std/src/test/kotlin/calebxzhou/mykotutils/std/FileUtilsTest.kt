@@ -34,7 +34,7 @@ class FileUtilsTest {
     @Test
     fun `normalized length ignores whitespace`() {
         tempFile.writeText("a b\n c")
-        val length = tempFile.computeNormalizedLength()
+        val length = tempFile.normalizedLength
         assertEquals(3u, length)
     }
 
