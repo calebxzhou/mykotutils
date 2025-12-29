@@ -184,19 +184,22 @@ object CurseForgeApi {
         mod:CFDownloadMod,
         onProgress: (DownloadProgress) -> Unit
     ): Result<Path> {
-        var downloadUrl = getModFileInfo(
+        val fileinfo = getModFileInfo(
             mod.projectId,
             mod.fileId
-        )?.realDownloadUrl
-        if (downloadUrl.isNullOrBlank()) {
-            throw AccessDeniedException("Can't get download url for mod ${mod.projectId}/${mod.fileId}")
+        ) ?: throw AccessDeniedException("cant get file fingerprint for mod ${mod.projectId}/${mod.fileId}")
+        val hash = fileinfo.fileFingerprint
+        if(mod.path.exists()&&mod.path.murmur2==hash){
+            lgr.debug { "mod file already exists and fingerprint matches: ${mod.path}" }
+            return Result.success(mod.path)
         }
+        var downloadUrl = fileinfo.realDownloadUrl
         if(useMirror){
             downloadUrl = downloadUrl.replace("edge.forgecdn.net", "mod.mcimirror.top").
             replace("mediafilez.forgecdn.net", "mod.mcimirror.top").
             replace("media.forgecdn.net", "mod.mcimirror.top")
         }
-        val dlPath = mod.path.downloadFileFrom(downloadUrl,onProgress).getOrElse { throw it }
+        val dlPath = mod.path.downloadFileFrom(downloadUrl, onProgress = onProgress).getOrElse { throw it }
         return Result.success(dlPath)
 
     }
