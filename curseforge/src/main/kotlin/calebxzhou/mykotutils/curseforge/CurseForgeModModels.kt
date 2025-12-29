@@ -204,7 +204,7 @@ data class CurseForgeFile(
     val isEarlyAccessContent: Boolean? = null,
     val earlyAccessEndDate: String? = null,
     val fileFingerprint: Long,
-    val modules: List<CurseForgeModule> = emptyList()
+    val modules: List<CurseForgeModule>? = emptyList()
 ){
     val realDownloadUrl
         get() = downloadUrl?:"https://mediafilez.forgecdn.net/files/${id.toString().substring(0..3).toInt()}/${id.toString().substring(4).toInt()}/${fileName?.urlEncoded}"
