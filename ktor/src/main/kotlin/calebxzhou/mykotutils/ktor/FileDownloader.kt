@@ -83,29 +83,33 @@ private val httpDlClient
 
 suspend fun Path.downloadFileFrom(
     url: String,
+    headers: Map<String, String> = emptyMap(),
     onProgress: (DownloadProgress) -> Unit
 ): Result<Path> {
     lgr.info { "Start download file:  $url" }
     val targetPath = this
-    val info = fetchRemoteFileInfo(url)
+    val info = fetchRemoteFileInfo(url, headers)
     val canUseRanges = info?.let { it.acceptRanges && it.contentLength >= MIN_PARALLEL_DOWNLOAD_SIZE } == true
     if (canUseRanges) {
         runCatching {
-            downloadWithRanges(url, targetPath, info.contentLength, onProgress)
+            downloadWithRanges(url, targetPath, info.contentLength, onProgress, headers)
         }.getOrElse { error ->
             lgr.warn(error) { "Parallel download failed, falling back to single stream" }
-            downloadSingleStream(url, targetPath, onProgress)
+            downloadSingleStream(url, targetPath, onProgress, headers)
         }
     } else {
-        downloadSingleStream(url, targetPath, onProgress)
+        downloadSingleStream(url, targetPath, onProgress, headers)
     }
     return Result.success(this)
 }
 
-private suspend fun fetchRemoteFileInfo(url: String): RemoteFileInfo? = try {
+private suspend fun fetchRemoteFileInfo(url: String, headers: Map<String, String>): RemoteFileInfo? = try {
     val response = httpDlClient.request {
         method = HttpMethod.Head
         url(url)
+        headers.forEach { (key, value) ->
+            header(key, value)
+        }
         timeout {
             requestTimeoutMillis = 30_000
             socketTimeoutMillis = 30_000
@@ -126,9 +130,13 @@ private suspend fun fetchRemoteFileInfo(url: String): RemoteFileInfo? = try {
 private suspend fun downloadSingleStream(
     url: String,
     targetPath: Path,
-    onProgress: (DownloadProgress) -> Unit
+    onProgress: (DownloadProgress) -> Unit,
+    headers: Map<String, String>
 ): Boolean {
     return httpDlClient.prepareGet(url) {
+        headers.forEach { (key, value) ->
+            header(key, value)
+        }
         timeout {
             requestTimeoutMillis = 600_000
             socketTimeoutMillis = 600_000
@@ -187,7 +195,8 @@ private suspend fun downloadWithRanges(
     url: String,
     targetPath: Path,
     totalBytes: Long,
-    onProgress: (DownloadProgress) -> Unit
+    onProgress: (DownloadProgress) -> Unit,
+    headers: Map<String, String>
 ): Boolean {
     targetPath.parent?.let { parent ->
         withContext(Dispatchers.IO) {
@@ -214,7 +223,7 @@ private suspend fun downloadWithRanges(
                 val jobs = ranges.map { (start, end) ->
                     async(Dispatchers.IO) {
                         semaphore.withPermit {
-                            downloadRangeChunk(url, start, end, totalBytes, fileChannel, progressUpdater)
+                            downloadRangeChunk(url, start, end, totalBytes, fileChannel, progressUpdater, headers)
                         }
                     }
                 }
@@ -246,9 +255,13 @@ private suspend fun downloadRangeChunk(
     end: Long,
     totalBytes: Long,
     fileChannel: FileChannel,
-    progressUpdater: (Long, Boolean) -> Unit
+    progressUpdater: (Long, Boolean) -> Unit,
+    headers: Map<String, String>
 ) {
     val response = httpDlClient.get(url) {
+        headers.forEach { (key, value) ->
+            header(key, value)
+        }
         header(HttpHeaders.Range, "bytes=$start-$end")
         header(HttpHeaders.AcceptEncoding, "identity")
         timeout {
