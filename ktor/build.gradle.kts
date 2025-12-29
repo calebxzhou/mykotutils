@@ -7,4 +7,6 @@ dependencies {
     implementation("io.ktor:ktor-client-core:$ktorVersion")
     implementation("io.ktor:ktor-client-okhttp:$ktorVersion")
     implementation("io.github.oshai:kotlin-logging-jvm:$kotlinLoggingVersion")
+    implementation("io.ktor:ktor-client-content-negotiation:${ktorVersion}")
+    implementation("io.ktor:ktor-serialization-kotlinx-json:${ktorVersion}")
 }
