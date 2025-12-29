@@ -44,8 +44,13 @@ object CurseForgeApi {
         get() =
             HttpClient(OkHttp) {
                 BrowserUserAgent()
+                install(ContentNegotiation){
+                    json(Json {
+                        ignoreUnknownKeys = true
+                    })
+                }
             }
-
+    @VisibleForTesting
     private suspend fun makeRequest(
         path: String,
         method: HttpMethod = HttpMethod.Get,
