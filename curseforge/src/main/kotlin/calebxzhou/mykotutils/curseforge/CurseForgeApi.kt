@@ -198,15 +198,32 @@ object CurseForgeApi {
             lgr.debug { "mod file already exists and fingerprint matches: ${mod.path}" }
             return Result.success(mod.path)
         }
-        var downloadUrl = fileinfo.realDownloadUrl
-        if(useMirror){
-            downloadUrl = downloadUrl.replace("edge.forgecdn.net", "mod.mcimirror.top").
-            replace("mediafilez.forgecdn.net", "mod.mcimirror.top").
-            replace("media.forgecdn.net", "mod.mcimirror.top")
-        }
-        val dlPath = mod.path.downloadFileFrom(downloadUrl, onProgress = onProgress).getOrElse { throw it }
-        return Result.success(dlPath)
+        val officialUrl = fileinfo.realDownloadUrl
+        val mirrorUrl = if (useMirror) officialUrl
+            .replace("edge.forgecdn.net", "mod.mcimirror.top")
+            .replace("mediafilez.forgecdn.net", "mod.mcimirror.top")
+            .replace("media.forgecdn.net", "mod.mcimirror.top") else officialUrl
 
+        suspend fun attempt(url: String, label: String): Result<Path> = runCatching {
+            val dlPath = mod.path.downloadFileFrom(url, onProgress = onProgress).getOrElse { throw it }
+            if (dlPath.murmur2 != hash) {
+                throw IllegalAccessException("downloaded mod file ${mod} fingerprint mismatch: expected $hash, got ${dlPath.murmur2}")
+            }
+            dlPath
+        }.onFailure { err ->
+            if (label == "mirror") {
+                lgr.warn(err) { "mirror download failed for ${mod.projectId}/${mod.fileId}, will retry official" }
+            }
+        }
+
+        val mirrorResult = if (useMirror) attempt(mirrorUrl, "mirror") else null
+        val finalResult = when {
+            mirrorResult == null -> attempt(officialUrl, "official")
+            mirrorResult.isSuccess -> mirrorResult
+            else -> attempt(officialUrl, "official")
+        }
+
+        return finalResult
     }
     suspend fun downloadMods(
         mods: Collection<CFDownloadMod>,
@@ -223,7 +240,7 @@ object CurseForgeApi {
             mods.map { mod ->
                 async(Dispatchers.IO) {
                     semaphore.withPermit {
-                        mod to runCatching { downloadMod(mod) { onProgress(mod, it) } }
+                        mod to runCatching { downloadMod(mod) { onProgress(mod, it) }.getOrThrow() }
                     }
                 }
             }.awaitAll()
