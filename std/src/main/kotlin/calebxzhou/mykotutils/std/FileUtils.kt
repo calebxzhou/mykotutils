@@ -105,8 +105,12 @@ val Byte.isWhitespaceCharacter: Boolean
 
     }
 
-fun Any.jarResource(path: String): InputStream = this::class.java.classLoader.getResourceAsStream(path) ?: run {
-    throw IllegalArgumentException("Resource not found: $path")
+fun Any.jarResource(path: String): InputStream {
+    val cl = Thread.currentThread().contextClassLoader
+        ?: this::class.java.classLoader
+        ?: ClassLoader.getSystemClassLoader()
+    return cl?.getResourceAsStream(path)
+        ?: throw IllegalArgumentException("Resource not found: $path")
 }
 
 fun File.exportFromJarResource(path: String): File {
