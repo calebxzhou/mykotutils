@@ -56,6 +56,12 @@ private val httpDlClient by lazy {
                 connectTimeout(15, TimeUnit.SECONDS)
                 readTimeout(0, TimeUnit.SECONDS) // 0 means no timeout for the stream read itself, handled by HttpTimeout
                 retryOnConnectionFailure(true)
+                // Increase parallelism and connection pool for asset swarms
+                dispatcher(okhttp3.Dispatcher().apply {
+                    maxRequests = 256
+                    maxRequestsPerHost = 256
+                })
+                connectionPool(okhttp3.ConnectionPool(256, 5, TimeUnit.MINUTES))
                 ProxySelector.getDefault()?.let {
                     proxySelector(it)
                 }
