@@ -18,6 +18,7 @@ import kotlin.jvm.java
  */
 
 fun File.digest(algo: String): String {
+    if(!this.exists()) return "0"
     val digest = MessageDigest.getInstance(algo)
     inputStream().use { input ->
         val buffer = ByteArray(8192)
@@ -37,13 +38,16 @@ val File.md5: String
     get() = digest("MD5")
 val File.sha512: String
     get() = digest("SHA-512")
-val Path.murmur2 get() = this.inputStream().murmur2
-val File.murmur2 get() = this.inputStream().murmur2
+val Path.murmur2 get() = runCatching { this.inputStream().murmur2 }
+    .getOrElse { if (it is java.io.FileNotFoundException) 0 else throw it }
+val File.murmur2 get() = runCatching { this.inputStream().murmur2 }
+    .getOrElse { if (it is java.io.FileNotFoundException) 0 else throw it }
 val InputStream.murmur2: Long
     get() {
         val multiplex = 1540483477u
 
         val data = use { it.readBytes() }
+        if (data.isEmpty()) return 0
         val normalizedLength = data.count { !it.isWhitespaceCharacter }.toUInt()
 
         var num2 = 1u xor normalizedLength
