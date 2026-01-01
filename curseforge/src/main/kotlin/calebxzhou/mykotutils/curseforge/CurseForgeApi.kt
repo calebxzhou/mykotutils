@@ -37,7 +37,7 @@ object CurseForgeApi {
     //if true, query from the mirror first  if fail then fallback to official, if false always query official
     val useMirror = true
     private val lgr by Loggers
-    private val MAX_PARALLEL_DOWNLOADS = max(4, Runtime.getRuntime().availableProcessors() * 4)
+    private val MAX_PARALLEL_DOWNLOADS = 8
     private val MIRROR_URL = "https://mod.mcimirror.top/curseforge/v1"
     const val OFFICIAL_URL = "https://api.curseforge.com/v1"
     private val httpClient
@@ -55,7 +55,7 @@ object CurseForgeApi {
         path: String,
         method: HttpMethod = HttpMethod.Get,
         body: Any? = null,
-        ignoreMirror: Boolean = MIRROR_URL == null
+        ignoreMirror: Boolean = false
     ): HttpResponse {
         suspend fun doRequest(base: String) = httpClient.request {
             url("${base}/${path}")
