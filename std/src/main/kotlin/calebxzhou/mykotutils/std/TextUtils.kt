@@ -1,7 +1,9 @@
 package calebxzhou.mykotutils.std
 
+import java.io.InputStream
 import java.net.URLDecoder
 import java.net.URLEncoder
+import java.nio.charset.Charset
 import java.util.Base64
 
 /**
@@ -71,4 +73,7 @@ fun String?.isValidHttpUrl(): Boolean {
         return false
     val urlRegex = "^(http://|https://).+".toRegex()
     return this.matches(urlRegex)
+}
+fun InputStream.readAllString(charset: Charset = Charsets.UTF_8): String {
+    return this.bufferedReader(charset).use { it.readText() }
 }
