@@ -1,32 +1,19 @@
 package calebxzhou.mykotutils.ktor
 
 import calebxzhou.mykotutils.log.Loggers
-import io.ktor.client.HttpClient
-import io.ktor.client.call.body
-import io.ktor.client.engine.okhttp.OkHttp
-import io.ktor.client.plugins.BrowserUserAgent
-import io.ktor.client.plugins.HttpTimeout
-import io.ktor.client.plugins.timeout
-import io.ktor.client.request.get
-import io.ktor.client.request.header
-import io.ktor.client.request.prepareGet
-import io.ktor.client.request.request
-import io.ktor.client.request.url
-import io.ktor.http.HttpHeaders
-import io.ktor.http.HttpHeaders.ContentEncoding
-import io.ktor.http.HttpMethod
-import io.ktor.http.HttpStatusCode
-import io.ktor.http.contentLength
-import io.ktor.http.isSuccess
-import io.ktor.utils.io.ByteReadChannel
-import io.ktor.utils.io.readAvailable
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.coroutineScope
+import io.ktor.client.*
+import io.ktor.client.call.*
+import io.ktor.client.engine.okhttp.*
+import io.ktor.client.plugins.*
+import io.ktor.client.request.*
+import io.ktor.client.statement.*
+import io.ktor.http.*
+import io.ktor.utils.io.*
+import io.ktor.utils.io.core.*
+import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
-import kotlinx.coroutines.withContext
+import java.io.IOException
 import java.net.ProxySelector
 import java.nio.ByteBuffer
 import java.nio.channels.FileChannel
@@ -38,11 +25,10 @@ import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.ceil
 import kotlin.math.max
 import kotlin.math.min
-import kotlin.text.contains
-import kotlin.text.toLongOrNull
 
 /**
  * calebxzhou @ 2025-12-20 11:49
+ * Fixed @ 2026-01-01
  */
 data class DownloadProgress(
     val bytesDownloaded: Long,
@@ -50,69 +36,90 @@ data class DownloadProgress(
     val speedBytesPerSecond: Double,
 ) {
     val percent: Double
-        get() = if (totalBytes <= 0) -1.0 else bytesDownloaded.toDouble() / totalBytes.toDouble() * 100.0
+        get() = if (totalBytes <= 0) -1.0 else (bytesDownloaded.toDouble() / totalBytes.toDouble() * 100.0).coerceAtMost(100.0)
 }
 
 private data class RemoteFileInfo(val contentLength: Long, val acceptRanges: Boolean)
 
 private val lgr by Loggers
-private const val MIN_PARALLEL_DOWNLOAD_SIZE = 2L * 1024 * 1024 // 2MB
-private const val TARGET_RANGE_CHUNK_SIZE = 2L * 1024 * 1024 // 2MB per chunk
+private const val MIN_PARALLEL_DOWNLOAD_SIZE = 5L * 1024 * 1024 // Increased to 5MB to avoid overhead on small files
+private const val TARGET_RANGE_CHUNK_SIZE = 4L * 1024 * 1024 // 4MB per chunk
 private val MAX_PARALLEL_RANGE_REQUESTS = max(2, Runtime.getRuntime().availableProcessors())
-private val httpDlClient
-    get() =
-        HttpClient(OkHttp) {
-            expectSuccess = false
-            engine {
-                config {
-                    followRedirects(true)
-                    connectTimeout(10, TimeUnit.SECONDS)
-                    readTimeout(0, TimeUnit.SECONDS)
-                    ProxySelector.getDefault()?.let {
-                        proxySelector(it)
-                    }
+
+// BUG FIX 1: Use 'by lazy' or direct assignment. Do NOT use 'get() =' which creates a new client every call.
+private val httpDlClient by lazy {
+    HttpClient(OkHttp) {
+        expectSuccess = false
+        engine {
+            config {
+                followRedirects(true)
+                connectTimeout(15, TimeUnit.SECONDS)
+                readTimeout(0, TimeUnit.SECONDS) // 0 means no timeout for the stream read itself, handled by HttpTimeout
+                retryOnConnectionFailure(true)
+                ProxySelector.getDefault()?.let {
+                    proxySelector(it)
                 }
             }
-            BrowserUserAgent()
-            install(HttpTimeout) {
-                requestTimeoutMillis = 60_000
-                connectTimeoutMillis = 10_000
-                socketTimeoutMillis = 60_000
-            }
         }
+        BrowserUserAgent()
+        install(HttpTimeout) {
+            requestTimeoutMillis = Long.MAX_VALUE // Handle large file timeouts manually via socket
+            connectTimeoutMillis = 15_000
+            socketTimeoutMillis = 60_000
+        }
+    }
+}
 
 suspend fun Path.downloadFileFrom(
     url: String,
     headers: Map<String, String> = emptyMap(),
+    // FIX 2: Add parameter to pass known file size
+    knownSize: Long = -1L,
     onProgress: (DownloadProgress) -> Unit
 ): Result<Path> {
-    lgr.info { "Start download file:  $url" }
+    lgr.info { "Start download file: $url -> $this" }
     val targetPath = this
+
+    // FIX 3: Optimization strategy
+    // If we know the size is small, SKIP the HEAD request and go straight to download
+    if (knownSize in 1 until MIN_PARALLEL_DOWNLOAD_SIZE) {
+        return runCatching {
+            downloadSingleStream(url, targetPath, onProgress, headers, expectedTotal = knownSize)
+            this
+        }
+    }
+
+    // Logic for unknown size or large files (keep existing logic)
     val info = fetchRemoteFileInfo(url, headers)
+    val totalSize = info?.contentLength ?: knownSize
+    // Ensure parent dir exists
+    targetPath.parent?.let { parent ->
+        withContext(Dispatchers.IO) {
+            if (!Files.exists(parent)) Files.createDirectories(parent)
+        }
+    }
     val canUseRanges = info?.let { it.acceptRanges && it.contentLength >= MIN_PARALLEL_DOWNLOAD_SIZE } == true
+
     if (canUseRanges) {
         runCatching {
-            downloadWithRanges(url, targetPath, info.contentLength, onProgress, headers)
+            downloadWithRanges(url, targetPath, totalSize, onProgress, headers)
         }.getOrElse { error ->
             lgr.warn(error) { "Parallel download failed, falling back to single stream" }
-            downloadSingleStream(url, targetPath, onProgress, headers)
+            // Clean up potentially corrupted partial file before fallback
+            withContext(Dispatchers.IO) { Files.deleteIfExists(targetPath) }
+            downloadSingleStream(url, targetPath, onProgress, headers, expectedTotal = totalSize)
         }
     } else {
-        downloadSingleStream(url, targetPath, onProgress, headers)
+        downloadSingleStream(url, targetPath, onProgress, headers, expectedTotal = totalSize)
     }
     return Result.success(this)
 }
 
 private suspend fun fetchRemoteFileInfo(url: String, headers: Map<String, String>): RemoteFileInfo? = try {
-    val response = httpDlClient.request {
-        method = HttpMethod.Head
-        url(url)
-        headers.forEach { (key, value) ->
-            header(key, value)
-        }
+    val response = httpDlClient.head(url) {
+        headers.forEach { (key, value) -> header(key, value) }
         timeout {
-            requestTimeoutMillis = 30_000
-            socketTimeoutMillis = 30_000
+            requestTimeoutMillis = 10_000
         }
     }
     if (!response.status.isSuccess()) {
@@ -123,7 +130,7 @@ private suspend fun fetchRemoteFileInfo(url: String, headers: Map<String, String
         RemoteFileInfo(length, acceptsRanges)
     }
 } catch (e: Exception) {
-    lgr.warn(e) { "HEAD request failed for $url" }
+    lgr.warn { "HEAD request failed for $url: ${e.message}" }
     null
 }
 
@@ -131,35 +138,26 @@ private suspend fun downloadSingleStream(
     url: String,
     targetPath: Path,
     onProgress: (DownloadProgress) -> Unit,
-    headers: Map<String, String>
+    headers: Map<String, String>,
+    expectedTotal: Long = -1L
 ): Boolean {
     return httpDlClient.prepareGet(url) {
-        headers.forEach { (key, value) ->
-            header(key, value)
-        }
-        timeout {
-            requestTimeoutMillis = 600_000
-            socketTimeoutMillis = 600_000
-        }
+        headers.forEach { (key, value) -> header(key, value) }
+        header(HttpHeaders.AcceptEncoding, "identity") // Force no compression to get accurate byte counts
     }.execute { response ->
         if (!response.status.isSuccess()) {
-            return@execute false
+            throw IOException("Download failed: ${response.status}")
         }
 
-        val totalBytes = response.contentLength() ?: response.headers[HttpHeaders.ContentLength]?.toLongOrNull() ?: -1L
-        targetPath.parent?.let { parent ->
-            withContext(Dispatchers.IO) {
-                if (!Files.exists(parent)) {
-                    Files.createDirectories(parent)
-                }
-            }
-        }
+        val totalBytes = if (expectedTotal > 0) expectedTotal else response.contentLength() ?: -1L
 
         val channel: ByteReadChannel = response.body()
         val buffer = ByteArray(8192)
         var bytesDownloaded = 0L
-        val startTime = System.currentTimeMillis()
-        var lastUpdateTime = startTime
+
+        // Progress tracking (Instant speed)
+        var lastReportTime = System.currentTimeMillis()
+        var lastReportBytes = 0L
 
         withContext(Dispatchers.IO) {
             Files.newOutputStream(targetPath, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING)
@@ -173,20 +171,21 @@ private suspend fun downloadSingleStream(
                         bytesDownloaded += bytesRead
 
                         val currentTime = System.currentTimeMillis()
-                        if (currentTime - lastUpdateTime >= 500) {
-                            val elapsedSeconds = (currentTime - startTime) / 1000.0
-                            val speed = if (elapsedSeconds > 0) bytesDownloaded / elapsedSeconds else 0.0
+                        if (currentTime - lastReportTime >= 500) {
+                            val timeDelta = (currentTime - lastReportTime) / 1000.0
+                            val bytesDelta = bytesDownloaded - lastReportBytes
+                            val speed = if (timeDelta > 0) bytesDelta / timeDelta else 0.0
+
                             onProgress(DownloadProgress(bytesDownloaded, totalBytes, speed))
-                            lastUpdateTime = currentTime
+
+                            lastReportTime = currentTime
+                            lastReportBytes = bytesDownloaded
                         }
                     }
-
-                    val elapsedSeconds = (System.currentTimeMillis() - startTime) / 1000.0
-                    val speed = if (elapsedSeconds > 0) bytesDownloaded / elapsedSeconds else 0.0
-                    onProgress(DownloadProgress(bytesDownloaded, totalBytes, speed))
+                    // Final report
+                    onProgress(DownloadProgress(bytesDownloaded, totalBytes, 0.0))
                 }
         }
-
         true
     }
 }
@@ -198,17 +197,11 @@ private suspend fun downloadWithRanges(
     onProgress: (DownloadProgress) -> Unit,
     headers: Map<String, String>
 ): Boolean {
-    targetPath.parent?.let { parent ->
-        withContext(Dispatchers.IO) {
-            if (!Files.exists(parent)) {
-                Files.createDirectories(parent)
-            }
-        }
-    }
-
     val chunkCount = max(1, ceil(totalBytes.toDouble() / TARGET_RANGE_CHUNK_SIZE).toInt())
     val ranges = buildRanges(totalBytes, chunkCount)
-    val parallelism = min(MAX_PARALLEL_RANGE_REQUESTS, ranges.size)
+
+    // Throttle parallelism
+    val semaphore = Semaphore(MAX_PARALLEL_RANGE_REQUESTS)
     val progressUpdater = createProgressAggregator(totalBytes, onProgress)
 
     return withContext(Dispatchers.IO) {
@@ -219,31 +212,42 @@ private suspend fun downloadWithRanges(
             StandardOpenOption.TRUNCATE_EXISTING
         ).use { fileChannel ->
             coroutineScope {
-                val semaphore = Semaphore(parallelism)
-                val jobs = ranges.map { (start, end) ->
-                    async(Dispatchers.IO) {
-                        semaphore.withPermit {
-                            downloadRangeChunk(url, start, end, totalBytes, fileChannel, progressUpdater, headers)
+                ranges.map { (start, end) ->
+                    async {
+                        // Retry logic per chunk
+                        var attempt = 0
+                        while (attempt < 3) {
+                            try {
+                                semaphore.withPermit {
+                                    downloadRangeChunk(url, start, end, totalBytes, fileChannel, progressUpdater, headers)
+                                }
+                                return@async // Success
+                            } catch (e: Exception) {
+                                attempt++
+                                if (attempt >= 3) throw e
+                                delay(1000L * attempt) // Exponential backoff
+                            }
                         }
                     }
-                }
-                jobs.awaitAll()
+                }.awaitAll()
             }
             true
         }
     }.also {
-        progressUpdater(0, true)
+        progressUpdater(0, true) // Final update
     }
 }
 
 private fun buildRanges(totalBytes: Long, chunkCount: Int): List<Pair<Long, Long>> {
     if (totalBytes <= 0) return listOf(0L to -1L)
-    val chunkSize = max(1L, totalBytes / chunkCount)
     val ranges = mutableListOf<Pair<Long, Long>>()
+    val partSize = totalBytes / chunkCount
     var start = 0L
-    while (start < totalBytes) {
-        val end = min(totalBytes - 1, start + chunkSize - 1)
-        ranges += start to end
+
+    for (i in 0 until chunkCount) {
+        // Last chunk gets the remainder
+        val end = if (i == chunkCount - 1) totalBytes - 1 else start + partSize - 1
+        ranges.add(start to end)
         start = end + 1
     }
     return ranges
@@ -259,31 +263,28 @@ private suspend fun downloadRangeChunk(
     headers: Map<String, String>
 ) {
     val response = httpDlClient.get(url) {
-        headers.forEach { (key, value) ->
-            header(key, value)
-        }
+        headers.forEach { (key, value) -> header(key, value) }
         header(HttpHeaders.Range, "bytes=$start-$end")
         header(HttpHeaders.AcceptEncoding, "identity")
-        timeout {
-            requestTimeoutMillis = 600_000
-            socketTimeoutMillis = 600_000
-        }
     }
 
-    if (start != 0L || (end != totalBytes - 1)) {
-        if (response.status != HttpStatusCode.PartialContent) {
-            throw IllegalStateException("Server did not honor range request, status=${response.status.value}")
-        }
+    // BUG FIX 2: Explicitly ensure we got Partial Content.
+    // If server ignores range and returns 200 OK, we must fail range download to avoid corrupting file.
+    if (response.status != HttpStatusCode.PartialContent) {
+        throw IllegalStateException("Server returned ${response.status} instead of 206 Partial Content for range $start-$end")
     }
 
     val channel: ByteReadChannel = response.body()
-    val buffer = ByteArray(8192)
+    // Allocate buffer once, wrap inside loop to update position
+    val buffer = ByteArray(16 * 1024)
     var position = start
+
     while (!channel.isClosedForRead) {
         val bytesRead = channel.readAvailable(buffer, 0, buffer.size)
         if (bytesRead == -1) break
         if (bytesRead == 0) continue
 
+        // Write to specific position in file
         writeBuffer(fileChannel, buffer, bytesRead, position)
         position += bytesRead
         progressUpdater(bytesRead.toLong(), false)
@@ -291,11 +292,11 @@ private suspend fun downloadRangeChunk(
 }
 
 private fun writeBuffer(channel: FileChannel, buffer: ByteArray, length: Int, position: Long) {
-    var written = 0
-    while (written < length) {
-        val byteBuffer = ByteBuffer.wrap(buffer, written, length - written)
-        val bytes = channel.write(byteBuffer, position + written)
-        written += bytes
+    val byteBuffer = ByteBuffer.wrap(buffer, 0, length)
+    var writtenTotal = 0
+    while (byteBuffer.hasRemaining()) {
+        val written = channel.write(byteBuffer, position + writtenTotal)
+        writtenTotal += written
     }
 }
 
@@ -303,25 +304,32 @@ private fun createProgressAggregator(
     totalBytes: Long,
     onProgress: (DownloadProgress) -> Unit
 ): (Long, Boolean) -> Unit {
-    val downloaded = AtomicLong(0)
-    val startTime = System.currentTimeMillis()
-    val lastUpdate = AtomicLong(startTime)
+    val downloadedTotal = AtomicLong(0)
 
-    return prog@{ delta, force ->
-        if (delta != 0L) {
-            downloaded.addAndGet(delta)
-        }
+    // Speed calculation state
+    val lastUpdateTimestamp = AtomicLong(System.currentTimeMillis())
+    val lastDownloadedSnapshot = AtomicLong(0)
+
+    return prog@{ deltaBytes, force ->
+        val currentTotal = if (deltaBytes > 0) downloadedTotal.addAndGet(deltaBytes) else downloadedTotal.get()
         val now = System.currentTimeMillis()
-        if (!force) {
-            val last = lastUpdate.get()
-            if (now - last < 500) {
-                return@prog
-            }
+        val lastTime = lastUpdateTimestamp.get()
+
+        if (!force && (now - lastTime < 500)) {
+            return@prog
         }
-        lastUpdate.set(now)
-        val elapsedSeconds = ((now - startTime) / 1000.0).coerceAtLeast(0.001)
-        val total = downloaded.get()
-        val speed = if (elapsedSeconds > 0) total / elapsedSeconds else 0.0
-        onProgress(DownloadProgress(total, totalBytes, speed))
+
+        // CAS loop to ensure thread-safe updates of the timestamp for speed calculation
+        if (lastUpdateTimestamp.compareAndSet(lastTime, now)) {
+            val lastBytes = lastDownloadedSnapshot.getAndSet(currentTotal)
+
+            val timeDeltaSec = (now - lastTime) / 1000.0
+            val bytesDelta = currentTotal - lastBytes
+
+            // BUG FIX 3: Calculate instant speed, not average speed
+            val speed = if (timeDeltaSec > 0) bytesDelta / timeDeltaSec else 0.0
+
+            onProgress(DownloadProgress(currentTotal, totalBytes, speed))
+        }
     }
 }
