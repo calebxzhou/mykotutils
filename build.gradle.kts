@@ -41,7 +41,7 @@ subprojects {
 	}
 
 	extensions.configure<KotlinJvmProjectExtension>("kotlin") {
-		jvmToolchain(21)
+		jvmToolchain(17)
 	}
 
 	extensions.configure<JavaPluginExtension> {
