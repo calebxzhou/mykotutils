@@ -58,10 +58,10 @@ private val httpDlClient by lazy {
                 retryOnConnectionFailure(true)
                 // Increase parallelism and connection pool for asset swarms
                 dispatcher(okhttp3.Dispatcher().apply {
-                    maxRequests = 256
-                    maxRequestsPerHost = 256
+                    maxRequests = 1024
+                    maxRequestsPerHost = 1024
                 })
-                connectionPool(okhttp3.ConnectionPool(256, 5, TimeUnit.MINUTES))
+                connectionPool(okhttp3.ConnectionPool(1024, 1, TimeUnit.MINUTES))
                 ProxySelector.getDefault()?.let {
                     proxySelector(it)
                 }
