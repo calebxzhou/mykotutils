@@ -44,7 +44,7 @@ private data class RemoteFileInfo(val contentLength: Long, val acceptRanges: Boo
 private val lgr by Loggers
 private const val MIN_PARALLEL_DOWNLOAD_SIZE = 5L * 1024 * 1024 // Increased to 5MB to avoid overhead on small files
 private const val TARGET_RANGE_CHUNK_SIZE = 4L * 1024 * 1024 // 4MB per chunk
-private val MAX_PARALLEL_RANGE_REQUESTS = max(2, Runtime.getRuntime().availableProcessors())
+val DEFAULT_RANGE_PARALLELISM = max(2, Runtime.getRuntime().availableProcessors())
 
 // BUG FIX 1: Use 'by lazy' or direct assignment. Do NOT use 'get() =' which creates a new client every call.
 private val httpDlClient by lazy {
@@ -81,6 +81,7 @@ suspend fun Path.downloadFileFrom(
     headers: Map<String, String> = emptyMap(),
     // FIX 2: Add parameter to pass known file size
     knownSize: Long = -1L,
+    rangeParallelism: Int = DEFAULT_RANGE_PARALLELISM,
     onProgress: (DownloadProgress) -> Unit
 ): Result<Path> {
     lgr.info { "Start download file: $url -> $this" }
@@ -108,7 +109,7 @@ suspend fun Path.downloadFileFrom(
 
     if (canUseRanges) {
         runCatching {
-            downloadWithRanges(url, targetPath, totalSize, onProgress, headers)
+            downloadWithRanges(url, targetPath, totalSize, onProgress, headers, rangeParallelism)
         }.getOrElse { error ->
             lgr.warn(error) { "Parallel download failed, falling back to single stream" }
             // Clean up potentially corrupted partial file before fallback
@@ -201,13 +202,14 @@ private suspend fun downloadWithRanges(
     targetPath: Path,
     totalBytes: Long,
     onProgress: (DownloadProgress) -> Unit,
-    headers: Map<String, String>
+    headers: Map<String, String>,
+    rangeParallelism: Int
 ): Boolean {
     val chunkCount = max(1, ceil(totalBytes.toDouble() / TARGET_RANGE_CHUNK_SIZE).toInt())
     val ranges = buildRanges(totalBytes, chunkCount)
 
     // Throttle parallelism
-    val semaphore = Semaphore(MAX_PARALLEL_RANGE_REQUESTS)
+    val semaphore = Semaphore(max(1, rangeParallelism))
     val progressUpdater = createProgressAggregator(totalBytes, onProgress)
 
     return withContext(Dispatchers.IO) {

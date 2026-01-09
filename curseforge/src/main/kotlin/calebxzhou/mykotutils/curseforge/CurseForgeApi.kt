@@ -1,6 +1,7 @@
 package calebxzhou.mykotutils.curseforge
 
 import calebxzhou.mykotutils.ktor.DownloadProgress
+import calebxzhou.mykotutils.ktor.DEFAULT_RANGE_PARALLELISM
 import calebxzhou.mykotutils.ktor.downloadFileFrom
 import calebxzhou.mykotutils.ktor.json
 import calebxzhou.mykotutils.log.Loggers
@@ -187,6 +188,7 @@ object CurseForgeApi {
     }
     suspend fun downloadMod(
         mod:CFDownloadMod,
+        rangeParallelism: Int = DEFAULT_RANGE_PARALLELISM,
         onProgress: (DownloadProgress) -> Unit
     ): Result<Path> {
         val fileinfo = getModFileInfo(
@@ -205,7 +207,11 @@ object CurseForgeApi {
             .replace("media.forgecdn.net", "mod.mcimirror.top") else officialUrl
 
         suspend fun attempt(url: String, label: String): Result<Path> = runCatching {
-            val dlPath = mod.path.downloadFileFrom(url, onProgress = onProgress).getOrElse { throw it }
+            val dlPath = mod.path.downloadFileFrom(
+                url,
+                rangeParallelism = rangeParallelism,
+                onProgress = onProgress
+            ).getOrElse { throw it }
             if (dlPath.murmur2 != hash) {
                 throw IllegalAccessException("downloaded mod file ${mod} fingerprint mismatch: expected $hash, got ${dlPath.murmur2}")
             }
@@ -233,6 +239,7 @@ object CurseForgeApi {
 
         val parallelism = min(MAX_PARALLEL_DOWNLOADS, mods.size)
         val semaphore = Semaphore(parallelism)
+        val perDownloadRange = max(1, DEFAULT_RANGE_PARALLELISM / parallelism)
         val downloaded = mutableListOf<CFDownloadMod>()
         val failures = mutableListOf<Pair<CFDownloadMod, Throwable>>()
 
@@ -240,7 +247,9 @@ object CurseForgeApi {
             mods.map { mod ->
                 async(Dispatchers.IO) {
                     semaphore.withPermit {
-                        mod to runCatching { downloadMod(mod) { onProgress(mod, it) }.getOrThrow() }
+                        mod to runCatching {
+                            downloadMod(mod, perDownloadRange) { onProgress(mod, it) }.getOrThrow()
+                        }
                     }
                 }
             }.awaitAll()
