@@ -7,16 +7,17 @@ import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.request.request
 import io.ktor.client.request.url
+import io.ktor.http.isSuccess
 import kotlinx.serialization.json.Json
 
 object MojangApi {
     private val lgr by Loggers
-    suspend fun getUuidFromName(name: String): Result<String> = runCatching {
+    suspend fun getUuidFromName(name: String): Result<String?> = runCatching {
         HttpClient().use {
             val resp = it.request { url("https://api.mojang.com/users/profiles/minecraft/${name}") }
 
             data class IdName(val name: String, val id: String)
-
+            if(resp.status.value==404) return Ok(null)
             val body = resp.body<IdName>()
             return Ok(body.id)
         }
