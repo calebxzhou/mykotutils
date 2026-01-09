@@ -7,21 +7,21 @@ import kotlinx.serialization.Serializable
  */
 
 @Serializable
-private data class MojangProfileResponse(
+data class MojangProfileResponse(
     val id: String,
     val name: String,
     val properties: List<MojangProperty> = emptyList(),
 )
 
 @Serializable
-private data class MojangProperty(
+data class MojangProperty(
     val name: String,
     val value: String,
     val signature: String? = null,
 )
 
 @Serializable
-private data class MojangTexturesPayload(
+data class MojangTexturesPayload(
     val timestamp: Long? = null,
     val profileId: String? = null,
     val profileName: String? = null,
@@ -29,12 +29,12 @@ private data class MojangTexturesPayload(
 )
 
 @Serializable
-private data class MojangTexture(
+data class MojangTexture(
     val url: String,
     val metadata: MojangTextureMetadata? = null,
 )
 
 @Serializable
-private data class MojangTextureMetadata(
+data class MojangTextureMetadata(
     val model: String? = null,
 )

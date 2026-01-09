@@ -1,52 +1,37 @@
 package calebxzhou.mykotutils.mojang
 
+import calebxzhou.mykotutils.log.Loggers
+import calebxzhou.mykotutils.std.Ok
 import calebxzhou.mykotutils.std.decodeBase64
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.request.request
 import io.ktor.client.request.url
+import kotlinx.serialization.json.Json
 
 object MojangApi {
-    suspend fun getUuidFromName(name: String): String? {
-        try {
-            val resp = HttpClient().request{url( "https://api.mojang.com/users/profiles/minecraft/${name}")}
-            data class IdName(val name: String,val id: String)
+    private val lgr by Loggers
+    suspend fun getUuidFromName(name: String): Result<String> = runCatching {
+        HttpClient().use {
+            val resp = it.request { url("https://api.mojang.com/users/profiles/minecraft/${name}") }
+
+            data class IdName(val name: String, val id: String)
+
             val body = resp.body<IdName>()
-            return body.id
-        } catch (e: Exception) {
-            e.printStackTrace()
-            return null
+            return Ok(body.id)
         }
     }
 
-    /*suspend fun getCloth(uuid: String): RAccount.Cloth? {
-        return try {
-            val resp = httpRequest { url("https://sessionserver.mojang.com/session/minecraft/profile/$uuid") }
+    suspend fun getProfile(uuidNoDash: String): Result<MojangProfileResponse> = runCatching {
+        HttpClient().use {
+            val resp = it.request { url("https://sessionserver.mojang.com/session/minecraft/profile/$uuidNoDash") }
             val profile = resp.body<MojangProfileResponse>()
-            val texturesValue = profile.properties.firstOrNull { it.name.equals("textures", ignoreCase = true) }?.value
-                ?: return null
-
-            val decodedTextures = try {
-                texturesValue.decodeBase64
-            } catch (ex: IllegalArgumentException) {
-                throw IllegalStateException("Failed to decode textures payload", ex)
-            }
-
-            val payload = serdesJson.decodeFromString<MojangTexturesPayload>(decodedTextures)
-            val textures = payload.textures
-            val skin = textures["SKIN"] ?: return null
-
-            val cloth = RAccount.Cloth(
-                isSlim = skin.metadata?.model.equals("slim", ignoreCase = true),
-                skin = skin.url,
-            )
-            textures["CAPE"]?.let { cloth.cape = it.url }
-            cloth
-        } catch (e: Exception) {
-            lgr.warn( "Failed to fetch Mojang cloth for uuid=$uuid" )
-            e.printStackTrace()
-            null
+            profile
         }
-    }*/
+    }
+    val MojangProfileResponse.textures
+        get() = properties
+            .firstOrNull { it.name.equals("textures", ignoreCase = true) }
+            ?.value?.decodeBase64?.let { Json.decodeFromString<MojangTexturesPayload>(it) }?.textures?: emptyMap()
 
 }
