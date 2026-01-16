@@ -35,8 +35,8 @@ data class DownloadProgress(
     val totalBytes: Long,
     val speedBytesPerSecond: Double,
 ) {
-    val percent: Double
-        get() = if (totalBytes <= 0) -1.0 else (bytesDownloaded.toDouble() / totalBytes.toDouble() * 100.0).coerceAtMost(100.0)
+    val fraction: Float
+        get() = if (totalBytes <= 0) -1f else (bytesDownloaded / totalBytes.toFloat() ).coerceAtMost(1f)
 }
 
 private data class RemoteFileInfo(val contentLength: Long, val acceptRanges: Boolean)
