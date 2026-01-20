@@ -175,3 +175,19 @@ fun File.deleteRecursivelyNoSymlink() {
     // Finally delete this file/directory
     this.delete()
 }
+fun canCreateSymlink(): Boolean {
+    val tempDir = File(System.getProperty("java.io.tmpdir")).toPath()
+    val target = runCatching { Files.createTempFile(tempDir, "symlink-test-target", ".tmp") }.getOrNull()
+        ?: return true
+    val link: Path = tempDir.resolve("symlink-test-link-${System.currentTimeMillis()}")
+    return runCatching {
+        Files.deleteIfExists(link)
+        Files.createSymbolicLink(link, target)
+        true
+    }.onFailure { err ->
+        err.printStackTrace()
+    }.getOrElse { false }.also {
+        runCatching { Files.deleteIfExists(link) }
+        runCatching { Files.deleteIfExists(target) }
+    }
+}
