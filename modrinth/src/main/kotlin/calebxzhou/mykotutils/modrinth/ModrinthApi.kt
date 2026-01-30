@@ -24,7 +24,7 @@ import kotlin.math.max
 
 object ModrinthApi {
     //if true, query from the mirror first  if fail then fallback to official, if false always query official
-    val useMirror = true
+    var useMirror = true
     private val lgr by Loggers
     private val MAX_PARALLEL_DOWNLOADS = max(4, Runtime.getRuntime().availableProcessors() * 4)
     const val BASE_URL = "https://mod.mcimirror.top/modrinth/v2"
@@ -84,16 +84,40 @@ object ModrinthApi {
             if (response.size != chunk.size) {
                 val missing = chunk.toSet() - response.map { it.id }.toSet() - response.map { it.slug }.toSet()
                 if (missing.isNotEmpty()) {
-                    lgr.debug("Modrinth: ${missing.size} ids from chunk unmatched: ${missing.joinToString()}")
+                    lgr.debug { "Modrinth: ${missing.size} ids from chunk unmatched: ${missing.joinToString()}" }
                 }
             }
         }
 
-        lgr.info("Modrinth: fetched ${projects.size} projects for ${normalizedIds.size} requested ids")
+        lgr.info { "Modrinth: fetched ${projects.size} projects for ${normalizedIds.size} requested ids" }
 
         return projects
     }
+    suspend fun getMultipleProjects(idSlugs: List<String>): List<ModrinthProject> {
+        val normalizedIds = idSlugs.asSequence()
+            .distinct()
+            .toList()
 
+        val chunkSize = 100
+        val projects = mutableListOf<ModrinthProject>()
+
+        normalizedIds.chunked(chunkSize).forEach { chunk ->
+            val response = mrreq("projects", params = mapOf("ids" to Json.encodeToString(chunk)))
+                .body<List<ModrinthProject>>()
+            projects += response
+
+            if (response.size != chunk.size) {
+                val missing = chunk.toSet() - response.map { it.id }.toSet() - response.map { it.slug }.toSet()
+                if (missing.isNotEmpty()) {
+                    lgr.debug { "Modrinth: ${missing.size} ids from chunk unmatched: ${missing.joinToString()}" }
+                }
+            }
+        }
+
+        lgr.info { "Modrinth: fetched ${projects.size} projects for ${normalizedIds.size} requested ids" }
+
+        return projects
+    }
     suspend fun List<File>.mapModrinthVersions(): Map<String, ModrinthVersionInfo> {
         val hashes = map { it.sha1 }
         val response = mrreq(
@@ -112,5 +136,24 @@ object ModrinthApi {
 
         return response
     }
+    suspend fun getVersionsFromHashes(
+        hashes: List<String>,
+        algorithm: String = "sha1"
+    ): Map<String, ModrinthVersionInfo> {
+        val response = mrreq(
+            "version_files",
+            method = HttpMethod.Post,
+            body = ModrinthVersionLookupRequest(hashes = hashes, algorithm = algorithm)
+        )
+            .body<Map<String, ModrinthVersionInfo>>()
 
+        val missing = hashes.filter { it !in response }
+        if (missing.isNotEmpty()) {
+            lgr.info { "Modrinth: ${response.size} matches, ${missing.size} hashes unmatched" }
+        } else {
+            lgr.info { "Modrinth: matched all ${response.size} hashes" }
+        }
+
+        return response
+    }
 }
