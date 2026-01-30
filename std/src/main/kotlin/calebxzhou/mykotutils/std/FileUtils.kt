@@ -10,6 +10,7 @@ import java.nio.file.Path
 import java.security.MessageDigest
 import java.util.zip.ZipFile
 import kotlin.collections.joinToString
+import kotlin.io.path.exists
 import kotlin.io.path.inputStream
 import kotlin.jvm.java
 
@@ -30,7 +31,23 @@ fun File.digest(algo: String): String {
     return digest.digest().joinToString("") { "%02x".format(it) }
 }
 
+fun Path.digest(algo: String): String {
+    if(!this.exists()) return "0"
+    val digest = MessageDigest.getInstance(algo)
+    inputStream().use { input ->
+        val buffer = ByteArray(8192)
+        var bytesRead: Int
+        while (input.read(buffer).also { bytesRead = it } != -1) {
+            digest.update(buffer, 0, bytesRead)
+        }
+    }
+    return digest.digest().joinToString("") { "%02x".format(it) }
+}
+
 val File.sha1: String
+    get() = digest("SHA-1")
+
+val Path.sha1: String
     get() = digest("SHA-1")
 val File.sha256: String
     get() = digest("SHA-256")
