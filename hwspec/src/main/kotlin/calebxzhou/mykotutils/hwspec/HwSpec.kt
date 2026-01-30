@@ -50,6 +50,7 @@ data class HwSpec(
         val width: Int, //cm
     )
     companion object{
+        val NOW by lazy { get() }
         fun get(): HwSpec{
             val systemInfo = SystemInfo()
             val hal = systemInfo.hardware
