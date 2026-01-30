@@ -36,7 +36,7 @@ import kotlin.math.min
 
 object CurseForgeApi {
     //if true, query from the mirror first  if fail then fallback to official, if false always query official
-    val useMirror = true
+    var useMirror = System.getProperty("mykotutils.cf.usemirror")?.toBooleanStrictOrNull() ?: true
     private val lgr by Loggers
     private val MAX_PARALLEL_DOWNLOADS = 8
     private val MIRROR_URL = "https://mod.mcimirror.top/curseforge/v1"
