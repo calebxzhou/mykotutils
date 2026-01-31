@@ -54,7 +54,9 @@ private val httpDlClient by lazy {
             config {
                 followRedirects(true)
                 connectTimeout(15, TimeUnit.SECONDS)
-                readTimeout(0, TimeUnit.SECONDS) // 0 means no timeout for the stream read itself, handled by HttpTimeout
+                // BUG FIX: Set a reasonable read timeout instead of infinite (0)
+                // This prevents hangs when server stops sending data but keeps connection open
+                readTimeout(60, TimeUnit.SECONDS)
                 retryOnConnectionFailure(true)
                 // Increase parallelism and connection pool for asset swarms
                 dispatcher(okhttp3.Dispatcher().apply {
@@ -165,14 +167,32 @@ private suspend fun downloadSingleStream(
         // Progress tracking (Instant speed)
         var lastReportTime = System.currentTimeMillis()
         var lastReportBytes = 0L
+        
+        // BUG FIX: Track consecutive zero reads to detect stalled connections
+        var consecutiveZeroReads = 0
+        val maxConsecutiveZeroReads = 100 // ~10 seconds with 100ms delay
 
         withContext(Dispatchers.IO) {
             Files.newOutputStream(targetPath, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING)
                 .use { outputStream ->
                     while (!channel.isClosedForRead) {
-                        val bytesRead = channel.readAvailable(buffer, 0, buffer.size)
+                        // BUG FIX: Use withTimeout to prevent indefinite hangs on read
+                        val bytesRead = withTimeoutOrNull(30_000L) {
+                            channel.readAvailable(buffer, 0, buffer.size)
+                        } ?: throw IOException("Read timeout - connection stalled")
+                        
                         if (bytesRead == -1) break
-                        if (bytesRead == 0) continue
+                        
+                        // BUG FIX: Handle zero reads properly - yield and track consecutive zeros
+                        if (bytesRead == 0) {
+                            consecutiveZeroReads++
+                            if (consecutiveZeroReads >= maxConsecutiveZeroReads) {
+                                throw IOException("Connection stalled - too many zero reads")
+                            }
+                            delay(100) // Prevent busy-wait, give network time
+                            continue
+                        }
+                        consecutiveZeroReads = 0 // Reset on successful read
 
                         outputStream.write(buffer, 0, bytesRead)
                         bytesDownloaded += bytesRead
@@ -286,16 +306,49 @@ private suspend fun downloadRangeChunk(
     // Allocate buffer once, wrap inside loop to update position
     val buffer = ByteArray(16 * 1024)
     var position = start
+    
+    // BUG FIX: Calculate expected bytes for this range and track progress
+    val expectedBytes = end - start + 1
+    var bytesReceived = 0L
+    
+    // BUG FIX: Track consecutive zero reads to detect stalled connections
+    var consecutiveZeroReads = 0
+    val maxConsecutiveZeroReads = 100 // ~10 seconds with 100ms delay
 
     while (!channel.isClosedForRead) {
-        val bytesRead = channel.readAvailable(buffer, 0, buffer.size)
+        // BUG FIX: Exit when we've received all expected bytes (don't rely solely on isClosedForRead)
+        if (bytesReceived >= expectedBytes) {
+            break
+        }
+        
+        // BUG FIX: Use withTimeout to prevent indefinite hangs on read
+        val bytesRead = withTimeoutOrNull(30_000L) {
+            channel.readAvailable(buffer, 0, buffer.size)
+        } ?: throw IOException("Read timeout - connection stalled for range $start-$end")
+        
         if (bytesRead == -1) break
-        if (bytesRead == 0) continue
+        
+        // BUG FIX: Handle zero reads properly - yield and track consecutive zeros
+        if (bytesRead == 0) {
+            consecutiveZeroReads++
+            if (consecutiveZeroReads >= maxConsecutiveZeroReads) {
+                throw IOException("Connection stalled - too many zero reads for range $start-$end")
+            }
+            delay(100) // Prevent busy-wait, give network time
+            continue
+        }
+        consecutiveZeroReads = 0 // Reset on successful read
 
         // Write to specific position in file
         writeBuffer(fileChannel, buffer, bytesRead, position)
         position += bytesRead
+        bytesReceived += bytesRead
         progressUpdater(bytesRead.toLong(), false)
+    }
+    
+    // BUG FIX: Verify we received all expected bytes
+    if (bytesReceived < expectedBytes) {
+        throw IOException("Incomplete range download: expected $expectedBytes bytes but received $bytesReceived for range $start-$end")
     }
 }
 
