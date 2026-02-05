@@ -4,7 +4,6 @@ val kotlinLoggingVersion: String by rootProject.extra
 dependencies {
     implementation(project(":std"))
     implementation(project(":log"))
-    implementation(project(":ktor"))
 
     implementation("io.github.oshai:kotlin-logging-jvm:$kotlinLoggingVersion")
     testImplementation("io.github.oshai:kotlin-logging-jvm:$kotlinLoggingVersion")

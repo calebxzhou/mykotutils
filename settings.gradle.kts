@@ -15,9 +15,8 @@ dependencyResolutionManagement {
 }
 
 
-include(":std", ":log", ":ktor", "hwspec","mojang")
+include(":std", ":log", "hwspec","mojang")
 project(":std").projectDir = file("std")
 project(":log").projectDir = file("log")
-project(":ktor").projectDir = file("ktor")
 project(":hwspec").projectDir = file("hwspec")
 project(":mojang").projectDir = file("mojang")
