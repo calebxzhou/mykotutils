@@ -15,7 +15,6 @@ dependencyResolutionManagement {
 }
 
 
-include(":std", ":log", "hwspec")
+include(":std", ":log")
 project(":std").projectDir = file("std")
 project(":log").projectDir = file("log")
-project(":hwspec").projectDir = file("hwspec")
